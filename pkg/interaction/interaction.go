@@ -69,9 +69,13 @@ type Data struct {
 		Name    string                                    `json:"name"`
 		ID      string                                    `json:"id"`
 	} `json:"data"`
-	ChannelID string `json:"channel_id"`
+	ChannelID     string `json:"channel_id"`
+	ApplicationID string `json:"application_id"`
 }
 
-func (data *Data) ResponseURL() string {
+func (data *Data) InteractionsURL() string {
 	return fmt.Sprintf("https://discord.com/api/v8/interactions/%s/%s/callback", data.ID, data.Token)
+}
+func (data *Data) FollowpURL() string {
+	return fmt.Sprintf("https://discord.com/api/v8/webhooks/%s/%s", data.ApplicationID, data.Token)
 }
