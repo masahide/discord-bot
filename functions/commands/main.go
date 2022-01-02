@@ -1,22 +1,31 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
-	"net/http"
+	"path"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/ec2/ec2iface"
+	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/aws/aws-sdk-go/service/ssm/ssmiface"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/masahide/discord-bot/pkg/interaction"
+	"github.com/masahide/discord-bot/pkg/state"
 )
 
 type specification struct {
-	Timezone string
-	SSMPath  string
+	Timezone  string
+	SSMPath   string
+	QueueURL  string
+	TableName string
 }
 
 func main() {
@@ -25,71 +34,81 @@ func main() {
 	if err != nil {
 		log.Fatal(err.Error())
 	}
+	sess := session.Must(session.NewSession())
+	h.ssm = ssm.New(sess)
+	h.ec2 = ec2.New(sess)
+	h.State = state.New(sess, h.env.TableName, h.env.QueueURL)
+	res, err := h.ssm.GetParameter(&ssm.GetParameterInput{
+		Name: aws.String(path.Join(h.env.SSMPath, "instanceid")),
+	})
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	h.instanceID = aws.StringValue(res.Parameter.Value)
 	lambda.Start(h.handler)
 }
 
 type Handler struct {
 	env specification
+	ssm ssmiface.SSMAPI
+	ec2 ec2iface.EC2API
+	*state.State
+	instanceID string
 }
+
+var (
+	stateMesMap = map[string]string{
+		state.StateStartPending: "🖥️すでに起動指示があり、現在サーバー起動途中でした。",
+		state.StateRunning:      "🖥️すでに起動していました。",
+		state.StateStopPending:  "🖥️現在サーバ停止作業中でした。",
+	}
+)
 
 func (h *Handler) handler(request events.APIGatewayProxyRequest) error {
 	//log.Printf(dump(map[string]interface{}{"request": request}))
-	var data interaction.Data
+	data := interaction.Data{}
 	if err := json.Unmarshal([]byte(request.Body), &data); err != nil {
-		log.Printf("json.Unmarshal(request.Body) err:%s, request:%s", err, dump(request))
+		log.Printf("json.Unmarshal(request.Body) err:%s, request:%s", err, state.Dump(request))
 		return err
 	}
-	// handle command
-	response := &WebhookInput{
-		Content: "hogehogehoge fuga\n日本語",
+	if data.Data.Name == "start" {
+		r, err := h.GetState(h.instanceID)
+		if err != nil {
+			log.Printf("GetState err:%s", err)
+		}
+		if time.Now().Before(time.Unix(int64(r.TTL), 0)) && r.State != state.StateStopped {
+			data.Post(stateMesMap[r.State])
+			if r.State != state.StateStopPending {
+				h.State.SendMessage(state.Message{
+					Type: state.MessageShowIP,
+					Data: data,
+				})
+			}
+			return nil
+		}
+		if err := h.StartState(h.instanceID); err != nil {
+			if ae, ok := err.(awserr.RequestFailure); ok && ae.Code() == "ConditionalCheckFailedException" {
+				data.Post(stateMesMap[state.StateStartPending])
+				log.Printf("ConditionalCheckFailedException:%v", data)
+				return nil
+			} else {
+				data.Post(fmt.Sprintf("サーバー起動エラー:[err:%s]", err))
+				log.Printf("StartState err:%s", err)
+			}
+		}
+		h.State.SendMessage(state.Message{
+			Type: state.MessageStartServer,
+			Data: data,
+		})
+		data.Post("🖥️サーバーを起動します👌")
+		if err := h.startInstance(); err != nil {
+			log.Printf("startInstance err:%s", err)
+		}
 	}
-	var responsePayload bytes.Buffer
-	if err := json.NewEncoder(&responsePayload).Encode(response); err != nil {
-		log.Printf("responsePayload encode err:%s", err)
-		return err
-	}
-
-	//log.Printf("URL:%s, res:%s", data.FollowpURL(), dump(response))
-	res, err := http.Post(data.FollowpURL(), "application/json", &responsePayload)
-	if err != nil {
-		log.Printf("ResponseURL Post err:%s, URL:%s", err, data.FollowpURL())
-		return err
-	}
-	defer res.Body.Close()
-
-	b, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		log.Printf("ReadAll(res.Body) err:%s", err)
-		return err
-	}
-
-	log.Printf(dump(map[string]interface{}{"type": "200OK", "request": data, "res": response, "post_res": string(b)}))
 	return nil
 }
 
-func dump(v interface{}) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Sprintf("json.Marshal err:%s, v:%q", err, v)
-	}
-	return string(b)
-}
-
-type WebhookInput struct {
-	Content   string `json:"content"`
-	Username  string `json:"username,omitempty"`
-	AvatarURL string `json:"avatar_url,omitempty"`
-	TTS       bool   `json:"tts,omitempty"`
-
-	// FIELD	TYPE	DESCRIPTION	REQUIRED
-	// content	string	the message contents (up to 2000 characters)	one of content, file, embeds
-	// username	string	override the default username of the webhook	false
-	// avatar_url	string	override the default avatar of the webhook	false
-	// tts	boolean	true if this is a TTS message	false
-	// embeds	array of up to 10 embed objects	embedded rich content	one of content, file, embeds
-	// allowed_mentions	allowed mention object	allowed mentions for the message	false
-	// components *	array of message component	the components to include with the message	false
-	// files[n] **	file contents	the contents of the file being sent	one of content, file, embeds
-	// payload_json **	string	JSON encoded body of non-file params	multipart/form-data only
-	// attachments **	array of partial attachment objects	attachment objects with filename and description	false
+func (h *Handler) startInstance() error {
+	_, err := h.ec2.StartInstances(&ec2.StartInstancesInput{InstanceIds: []*string{&h.instanceID}})
+	return err
 }

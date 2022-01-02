@@ -23,10 +23,12 @@ import (
 )
 
 type specification struct {
-	Timezone string
-	SSMPath  string
-	PubKey   string
-	CmdFunc  string
+	Timezone  string
+	SSMPath   string
+	PubKey    string
+	CmdFunc   string
+	QueueURL  string
+	TableName string
 }
 
 func main() {

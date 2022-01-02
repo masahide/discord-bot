@@ -1,8 +1,12 @@
 package interaction
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
 	"time"
 )
 
@@ -78,4 +82,37 @@ func (data *Data) InteractionsURL() string {
 }
 func (data *Data) FollowpURL() string {
 	return fmt.Sprintf("https://discord.com/api/v8/webhooks/%s/%s", data.ApplicationID, data.Token)
+}
+
+func (data *Data) Post(content string) error {
+	response := &WebhookInput{Content: content}
+	var responsePayload bytes.Buffer
+	if err := json.NewEncoder(&responsePayload).Encode(response); err != nil {
+		log.Printf("responsePayload encode err:%s", err)
+		return err
+	}
+
+	//log.Printf("URL:%s, res:%s", data.FollowpURL(), dump(response))
+	res, err := http.Post(data.FollowpURL(), "application/json", &responsePayload)
+	if err != nil {
+		log.Printf("ResponseURL Post err:%s, URL:%s", err, data.FollowpURL())
+		return err
+	}
+	defer res.Body.Close()
+
+	b, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("ReadAll(res.Body) err:%s", err)
+		return err
+	}
+
+	log.Printf(Dump(map[string]interface{}{"type": "200OK", "request": data, "res": response, "post_res": string(b)}))
+	return nil
+}
+func Dump(v interface{}) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("json.Marshal err:%s, v:%q", err, v)
+	}
+	return string(b)
 }
