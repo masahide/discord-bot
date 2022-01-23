@@ -112,3 +112,40 @@ func (h *Handler) startInstance() error {
 	_, err := h.ec2.StartInstances(&ec2.StartInstancesInput{InstanceIds: []*string{&h.instanceID}})
 	return err
 }
+
+func (h *Handler) checkInstance() (bool, error) {
+	in := &ec2.DescribeInstancesInput{
+		Filters: []*ec2.Filter{&ec2.Filter{Name: aws.String("tag:Name"), Values: []*string{&h.instanceID}}},
+	}
+	res, err := h.ec2.DescribeInstances(in)
+	if err != nil {
+		log.Printf("DescribeInstances err:%s", err)
+		return false, err
+	}
+	for _, r := range res.Reservations {
+		for _, i := range r.Instances {
+			if isIgnoreInstance(i) {
+				log.Printf("ignore Instance: %s, state:%s", aws.StringValue(i.InstanceId), aws.StringValue(i.State.Name))
+				continue
+			}
+			return isRunningInstance(i), nil
+		}
+	}
+	return false, nil
+}
+
+func isIgnoreInstance(i *ec2.Instance) bool {
+	switch aws.StringValue(i.State.Name) {
+	case ec2.InstanceStateNameTerminated, ec2.InstanceStateNameShuttingDown:
+		return true
+	}
+	return false
+}
+
+func isRunningInstance(i *ec2.Instance) bool {
+	switch aws.StringValue(i.State.Name) {
+	case ec2.InstanceStateNameRunning, ec2.InstanceStateNameStopping, ec2.InstanceStateNamePending:
+		return true
+	}
+	return false
+}

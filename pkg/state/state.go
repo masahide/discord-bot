@@ -89,7 +89,7 @@ func (s *State) PutState(id, newState string) error {
 	r := Record{
 		ID:    id,
 		State: newState,
-		TTL:   int(time.Now().Add(15 * time.Minute).Unix()),
+		TTL:   int(time.Now().Add(4 * time.Minute).Unix()),
 	}
 	av, err := dynamodbattribute.MarshalMap(r)
 	if err != nil {

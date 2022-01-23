@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"path"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -16,7 +18,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/ssm/ssmiface"
 	"github.com/k0kubun/pp"
 	"github.com/kelseyhightower/envconfig"
-	"github.com/masahide/discord-bot/pkg/interaction"
 	"github.com/masahide/discord-bot/pkg/state"
 )
 
@@ -25,6 +26,7 @@ type specification struct {
 	SSMPath   string
 	QueueURL  string
 	TableName string
+	StateFile string `default:"/tmp/7dtd_executer.data.json"`
 }
 
 func main() {
@@ -47,26 +49,6 @@ func main() {
 	if len(h.instanceID) == 0 {
 		log.Fatalf("instanceID cannot be obtained from parameterStore:%s", key)
 	}
-	/*
-		r, err := h.GetState(h.instanceID)
-		if err != nil {
-			log.Fatalf("table:%s, errType:%T err:%s", h.env.TableName, err, err)
-		}
-		log.Println("record:", r)
-		if err := h.StartState(h.instanceID); err != nil {
-			if ae, ok := err.(awserr.RequestFailure); ok && ae.Code() == "ConditionalCheckFailedException" {
-				log.Printf("すでにスタート済み")
-			} else {
-				log.Printf("StartState err:%s", err)
-			}
-		}
-	*/
-
-	/*
-		if err := h.PutState(h.instanceID, state.StateRunning); err != nil {
-			log.Fatalf("PutState err:%s", err)
-		}
-	*/
 
 	h.receiveMes()
 }
@@ -85,7 +67,7 @@ func (h *Handler) receiveMes() {
 			if err := h.PutState(h.instanceID, state.StateRunning); err != nil {
 				log.Printf("PutState err:%s", err)
 			}
-			postTTL = time.Now().Add(5 * time.Minute)
+			postTTL = time.Now().Add(3 * time.Minute)
 			//log.Println("PutState.")
 			return
 		}
@@ -122,6 +104,11 @@ func (h *Handler) execute(m state.Message, org *sqs.Message) {
 		if err := h.DeleteMessage(org); err != nil {
 			log.Printf("DeleteMessage err:%s", err)
 		}
+		j := state.Dump(map[string]string{
+			"url": m.Data.FollowpURL(),
+			"ttl": strconv.Itoa(int(time.Now().Add(870 * time.Second).Unix())),
+		})
+		ioutil.WriteFile(h.env.StateFile, []byte(j), 0644)
 	case state.MessageShowIP:
 		ip := getPublicIP()
 		m.Data.Post(fmt.Sprintf("サーバーIP: `%s`", ip))
@@ -149,17 +136,4 @@ func getPublicIP() string {
 		return ""
 	}
 	return string(body)
-}
-
-func (h *Handler) handler(data interaction.Data) error {
-	//log.Printf(dump(map[string]interface{}{"request": request}))
-	/*
-		var data interaction.Data
-		if err := json.Unmarshal([]byte(request.Body), &data); err != nil {
-			log.Printf("json.Unmarshal(request.Body) err:%s, request:%s", err, dump(request))
-			return err
-		}
-	*/
-	// handle command
-	return nil
 }
